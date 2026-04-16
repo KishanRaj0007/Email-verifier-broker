@@ -6,38 +6,71 @@ def run_bulk_verification(input_filename="team_data.csv"):
     print(f"Reading data from {input_filename}...")
     
     contacts = []
+    seen_emails = set()
+    duplicate_count = 0
+    file_loaded = False
     
-    try:
-        with open(input_filename, mode='r', encoding='utf-8-sig') as file:
-            reader = csv.reader(file)
+    # List of common Excel export encodings (includes Japanese and Windows standards)
+    encodings = ['utf-8-sig', 'utf-8', 'shift_jis', 'cp932', 'cp1252', 'latin-1']
+    
+    for enc in encodings:
+        try:
+            # Reset lists if a previous encoding attempt partially failed
+            contacts.clear()
+            seen_emails.clear()
+            duplicate_count = 0
             
-            for row in reader:
-                # Skip empty rows or rows without an email in the first column
-                if not row or not row[0].strip():
-                    continue
+            with open(input_filename, mode='r', encoding=enc) as file:
+                reader = csv.reader(file)
                 
-                # Map columns by index assuming order: Email, Name, Phone, Score, URL
-                contact = {
-                    "email": row[0].strip(),
-                    "name": row[1].strip() if len(row) > 1 else "",
-                    "phone": row[2].strip() if len(row) > 2 else "",
-                    "score": row[3].strip() if len(row) > 3 else 0,
-                    "url": row[4].strip() if len(row) > 4 else ""
-                }
-                contacts.append(contact)
-                
-    except FileNotFoundError:
-        print(f"Error: Could not find '{input_filename}'.")
+                for row in reader:
+                    if not row or not row[0].strip():
+                        continue
+                    
+                    raw_email = row[0].strip()
+                    email_lower = raw_email.lower()
+                    
+                    if email_lower in seen_emails:
+                        duplicate_count += 1
+                        continue
+                    
+                    seen_emails.add(email_lower)
+                    
+                    contact = {
+                        "email": raw_email,
+                        "name": row[1].strip() if len(row) > 1 else "",
+                        "phone": row[2].strip() if len(row) > 2 else "",
+                        "score": row[3].strip() if len(row) > 3 else 0,
+                        "url": row[4].strip() if len(row) > 4 else ""
+                    }
+                    contacts.append(contact)
+            
+            file_loaded = True
+            print(f"Successfully read file using {enc} encoding.")
+            break  # Exit loop if reading was successful
+            
+        except UnicodeDecodeError:
+            continue  # Try the next encoding in the list
+        except FileNotFoundError:
+            print(f"Error: Could not find '{input_filename}'.")
+            sys.exit(1)
+        except Exception as e:
+            print(f"Error reading CSV: {e}")
+            sys.exit(1)
+
+    if not file_loaded:
+        print("Error: Could not read the file with any standard text encoding.")
+        print("Please open the file in Excel and use 'Save As -> CSV UTF-8 (Comma delimited)'.")
         sys.exit(1)
-    except Exception as e:
-        print(f"Error reading CSV: {e}")
-        sys.exit(1)
+
+    if duplicate_count > 0:
+        print(f"Cleaned up {duplicate_count} duplicate emails from the input file.")
 
     if not contacts:
-        print("No valid emails found in the CSV.")
+        print("No valid unique emails found in the CSV.")
         sys.exit(1)
 
-    print(f"Sending {len(contacts)} contacts to the Java Microservice...")
+    print(f"Sending {len(contacts)} unique contacts to the Java Microservice...")
 
     try:
         url = "http://localhost:8080/api/v1/verify-batch"
@@ -75,8 +108,6 @@ def save_to_csv(data, filename):
             fieldnames.append('status')
             
         writer = csv.DictWriter(file, fieldnames=fieldnames)
-        
-        # Writes a header in the final output file for clarity
         writer.writeheader()
         writer.writerows(data)
         
